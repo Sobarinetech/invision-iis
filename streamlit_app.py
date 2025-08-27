@@ -3,30 +3,18 @@ import pandas as pd
 import tempfile
 import os
 from fpdf import FPDF
-from supabase import create_client, Client
 
 # Gemini AI imports
 import base64
 from google import genai
 from google.genai import types
 
+# Supabase imports
+from supabase import create_client
+
 # ------------------- CONFIG -------------------
 st.set_page_config(page_title="Invision Insolvency Intelligence Solutions", layout="wide")
 st.title("Invision Insolvency Intelligence Solutions")
-
-# ---------- SUPABASE CLIENT ----------
-SUPABASE_URL = st.secrets.get("SUPABASE_URL")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")
-
-@st.cache_resource
-def init_supabase_client():
-    if SUPABASE_URL and SUPABASE_KEY:
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
-    else:
-        st.error("Supabase URL or Key not found in Streamlit secrets.")
-        return None
-
-supabase: Client = init_supabase_client()
 
 # --------- UTILITY FUNCTIONS --------------
 
@@ -131,9 +119,60 @@ def generate_pdf(text, title="Report"):
         pdf_bytes = tmp_pdf.read()
     return pdf_bytes
 
+# ------------------- SUPABASE DB UTILITY -------------------
+@st.cache_resource(show_spinner=False)
+def get_supabase_client():
+    url = st.secrets.get("SUPABASE_URL")
+    key = st.secrets.get("SUPABASE_KEY")
+    if not url or not key:
+        st.error("Missing Supabase URL or Key in secrets!")
+        return None
+    return create_client(url, key)
+
+def run_supabase_sql(query):
+    client = get_supabase_client()
+    if not client:
+        return None, "Supabase connection not available."
+    try:
+        result = client.rpc('run_sql', {'sql': query}).execute() # Use run_sql function if created on Supabase
+        if result.data:
+            df = pd.DataFrame(result.data)
+            return df, None
+        else:
+            return pd.DataFrame(), None
+    except Exception as e:
+        return None, str(e)
+
+def fetch_nclt_table_data(search_text=None):
+    client = get_supabase_client()
+    if not client:
+        return None, "Supabase connection not available."
+    try:
+        query = client.table("nclt_intelligence").select("*")
+        if search_text:
+            # Attempt basic search: check all columns for LIKE match
+            meta = client.table("nclt_intelligence").select("*").limit(1).execute()
+            if meta.data:
+                columns = list(meta.data[0].keys())
+                # Build OR filters for LIKE match
+                search_filter = "|".join([f"{col}.ilike.%{search_text}%" for col in columns])
+                query = query.or_(search_filter)
+        result = query.execute()
+        if result.data:
+            df = pd.DataFrame(result.data)
+            return df, None
+        else:
+            return pd.DataFrame(), None
+    except Exception as e:
+        return None, str(e)
+
 # ------------------- APP LAYOUT -------------------
 
-tab1, tab2, tab3 = st.tabs(["Document Intelligence", "Valuation Reports & Compliance", "NCLT Cases"])
+tab1, tab2, tab3 = st.tabs([
+    "Document Intelligence",
+    "Valuation Reports & Compliance",
+    "NCLT Cases"
+])
 
 # ----------------- TAB 1: DOCUMENT INTELLIGENCE -----------------
 with tab1:
@@ -231,130 +270,57 @@ with tab2:
 
 # ----------------- TAB 3: NCLT CASES -----------------
 with tab3:
-    st.header("NCLT Intelligence Database")
+    st.header("NCLT Cases Intelligence Database")
+    st.markdown("> Powered by Supabase. All columns fetched from `nclt_intelligence` table.")
 
-    if supabase:
-        st.subheader("Simple Search")
-        search_query = st.text_input("Enter keywords to search in 'Content' or 'Regulatory File Name'")
-        search_button = st.button("Search")
-
-        if search_button and search_query:
-            with st.spinner("Searching..."):
-                try:
-                    # Simple search across 'Regulatory File Name' and 'Content 1'
-                    response = supabase.table("nclt_intelligence").select("*").or_(
-                        f"Regulatory_File_Name.ilike.%{search_query}%,Content_1.ilike.%{search_query}%"
-                    ).execute()
-                    
-                    if response.data:
-                        df_results = pd.DataFrame(response.data)
-                        st.dataframe(df_results)
-                    else:
-                        st.info("No results found for your simple search query.")
-                except Exception as e:
-                    st.error(f"Error during simple search: {e}")
-
-        st.subheader("Advanced SQL Editor")
-        st.warning("Use with caution. Incorrect SQL queries may lead to errors. Only `SELECT` queries are supported.")
-        sql_query_template = """SELECT "Unique ID", "Regulatory File Name", "Content 1" FROM nclt_intelligence WHERE "Content 1" ILIKE '%your_keyword%' LIMIT 10;"""
-        advanced_sql_query = st.text_area(
-            "Enter your SQL query (SELECT statements only):",
-            value=sql_query_template,
-            height=200
-        )
-        execute_sql_button = st.button("Execute SQL Query")
-
-        if execute_sql_button and advanced_sql_query:
-            if not advanced_sql_query.strip().upper().startswith("SELECT"):
-                st.error("Only SELECT queries are allowed for security reasons.")
-            else:
-                with st.spinner("Executing SQL query..."):
-                    try:
-                        # Supabase's `rpc` method can be used for custom SQL functions,
-                        # but for direct table queries, `from().select()` is safer.
-                        # For a full SQL editor, you'd typically need a custom endpoint
-                        # or a more sophisticated query builder.
-                        # As a workaround, we'll try to parse and execute a simple SELECT.
-                        # THIS IS A SIMPLIFIED EXAMPLE AND NOT A SECURE PRODUCTION SQL EDITOR.
-                        # A robust solution would involve proper SQL parsing and sanitization.
-
-                        # Attempt to parse a basic SELECT statement for demonstration
-                        # This is highly limited and prone to failure with complex SQL
-                        # For a real SQL editor, consider using a library like sqlparse
-                        # to extract table and WHERE clauses safely.
-
-                        # A safer approach for a generic SQL editor in Supabase
-                        # would be to define views or stored procedures and call them via rpc.
-                        # Direct arbitrary SQL execution from client is generally discouraged.
-
-                        # For demonstration, let's just attempt a generic select from 'nclt_intelligence'
-                        # based on the entered query structure, but only for `SELECT` clauses
-                        # and by extracting conditions. This is still not robust.
-
-                        # A more practical way for limited advanced search:
-                        # Allow users to specify column, operator, and value, then build the query.
-                        # For full SQL, it's problematic without a backend service.
-
-                        # Let's pivot to a safer "advanced search" that uses Supabase's query builder
-                        # but gives users more control over columns and conditions, rather than raw SQL.
-                        # However, since the request explicitly asks for "SQL editor", we will
-                        # demonstrate a highly *simplified and unsafe* version, with strong warnings.
-                        # For production, this part needs a secure backend.
-
-                        # Simulating a direct SQL execution (NOT RECOMMENDED FOR PRODUCTION)
-                        # This part would typically be handled by a secure backend API that
-                        # validates and executes the SQL, returning results.
-                        st.info("Direct SQL execution is simulated here. For production, a secure backend is required.")
-                        
-                        # Fetch all data and filter in Pandas for demonstration of "SQL-like" features
-                        # This is inefficient for large datasets but avoids raw SQL injection in frontend
-                        # with `supabase-py`.
-                        response = supabase.table("nclt_intelligence").select("*").execute()
-                        all_data_df = pd.DataFrame(response.data)
-
-                        # A very basic (and unsafe) attempt to filter based on WHERE clause in text_area
-                        # This is *not* a real SQL engine.
-                        try:
-                            # Extract parts (this is very fragile)
-                            parts = advanced_sql_query.upper().split("FROM NCLT_INTELLIGENCE WHERE", 1)
-                            if len(parts) == 2:
-                                where_clause_str = parts[1].strip().split("LIMIT")[0].strip()
-                                
-                                # Convert simple ILIKE conditions to Pandas string contains
-                                # Example: "Content 1" ILIKE '%keyword%'
-                                if "ILIKE" in where_clause_str:
-                                    col, _, val = where_clause_str.partition("ILIKE")
-                                    col = col.strip().strip('"')
-                                    val = val.strip().strip("'").strip("%")
-                                    
-                                    if col in all_data_df.columns:
-                                        filtered_df = all_data_df[all_data_df[col].astype(str).str.contains(val, case=False, na=False)]
-                                        st.dataframe(filtered_df.head(10)) # Apply limit manually
-                                    else:
-                                        st.error(f"Column '{col}' not found for filtering.")
-                                else:
-                                    st.error("Only simple ILIKE conditions are supported in this demo 'WHERE' clause parser.")
-                            else:
-                                # If no WHERE clause, just show a sample
-                                st.dataframe(all_data_df.head(10))
-
-                        except Exception as e:
-                            st.error(f"Error parsing SQL-like query or filtering data: {e}")
-                            st.dataframe(all_data_df.head(10)) # Fallback
-                        
-                    except Exception as e:
-                        st.error(f"Error executing advanced SQL query: {e}")
+    # Basic Search Bar
+    search_text = st.text_input("Basic Search (searches all columns):", "")
+    if st.button("Search NCLT Cases"):
+        with st.spinner("Searching NCLT cases..."):
+            df, err = fetch_nclt_table_data(search_text if search_text else None)
+        if err:
+            st.error(f"Error: {err}")
+        elif df is not None and not df.empty:
+            st.success(f"Found {len(df)} records.")
+            st.dataframe(df)
+        else:
+            st.warning("No results found.")
     else:
-        st.warning("Supabase client not initialized. Please check your `SUPABASE_URL` and `SUPABASE_KEY` in Streamlit secrets.")
+        # Initial load: show top 50 records
+        df, err = fetch_nclt_table_data()
+        if err:
+            st.error(f"Error: {err}")
+        elif df is not None and not df.empty:
+            st.dataframe(df.head(50))
 
+    # Advanced SQL Query Editor (read-only)
+    st.markdown("### Advanced SQL Query (Read-only)")
+    st.markdown(
+        "Write custom **SELECT** queries. Example: `SELECT * FROM nclt_intelligence WHERE status = 'Active' LIMIT 10`"
+    )
+    sql_query = st.text_area("SQL Query", "SELECT * FROM nclt_intelligence LIMIT 20", height=80)
+    if st.button("Run SQL Query"):
+        if not sql_query.strip().lower().startswith("select"):
+            st.warning("Only SELECT queries are allowed!")
+        else:
+            with st.spinner("Running SQL query..."):
+                df_sql, err_sql = run_supabase_sql(sql_query)
+            if err_sql:
+                st.error(f"Error: {err_sql}")
+            elif df_sql is not None and not df_sql.empty:
+                st.success(f"Query returned {len(df_sql)} records.")
+                st.dataframe(df_sql)
+            else:
+                st.warning("No results from query.")
 
 # ------------------- FOOTER INFO -------------------
 st.markdown("""
 ---
 **Note:**  
 - The app uses Google Gemini AI via google-genai python package.  
-- Requires: `pip install streamlit pandas fpdf PyPDF2 python-docx google-genai supabase`  
+- Requires: `pip install streamlit pandas fpdf PyPDF2 python-docx google-genai`  
 - For image text extraction: `pip install pytesseract pillow` (and install Tesseract if you want image text extraction).
-- Add your API key to Streamlit secrets as `GEMINI_API_KEY`.
-- Add your Supabase URL and Key to Streamlit secrets as `SUPABASE_URL` and `SUPABASE_KEY`.
+- Add your API key to Streamlit secrets as `GEMINI_API_KEY` or set as environment variable.
+- For NCLT tab: add `SUPABASE_URL` and `SUPABASE_KEY` in Streamlit secrets.  
+- Supabase read-only queries require a function called `run_sql` on Supabase (Postgres) that runs arbitrary SELECT SQL and returns results.
 """)
