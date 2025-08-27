@@ -16,7 +16,7 @@ from supabase import create_client
 st.set_page_config(page_title="Invision Insolvency Intelligence Solutions", layout="wide")
 
 # Display current time and user
-current_time = "2025-08-27 16:41:40"  # UTC
+current_time = "2025-08-27 17:15:39"  # UTC
 current_user = "evertechno"
 
 st.title("Invision Insolvency Intelligence Solutions")
@@ -373,4 +373,4 @@ with tab3:
         else:
             with st.spinner("Executing query..."):
                 df_sql, err_sql = run_supabase_sql(sql_query)
-            if err
+            
