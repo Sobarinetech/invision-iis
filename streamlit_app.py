@@ -19,12 +19,6 @@ st.title("Invision Insolvency Intelligence Solutions")
 # --------- UTILITY FUNCTIONS --------------
 
 def call_gemini_ai(input_text):
-    """
-    Calls Gemini AI (Google GenAI) using google-genai python package.
-    Requires:
-      - pip install google-genai
-      - GEMINI_API_KEY in Streamlit secrets or env
-    """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         try:
@@ -62,7 +56,6 @@ def call_gemini_ai(input_text):
         return f"Failed to call Gemini AI: {str(e)}"
 
 def extract_text_from_file(uploaded_file):
-    # Basic extractor: text, pdf, docx, images (optional: add more robust extractors as needed)
     import mimetypes
     file_type = mimetypes.guess_type(uploaded_file.name)[0] or ""
     ext = os.path.splitext(uploaded_file.name)[1].lower()
@@ -95,7 +88,7 @@ def extract_text_from_file(uploaded_file):
             text = "Unsupported file type."
     except Exception:
         text = "Failed to process file."
-    return text[:6000] # Limit input for AI
+    return text[:6000]
 
 def assets_template_csv():
     return (
@@ -129,12 +122,19 @@ def get_supabase_client():
         return None
     return create_client(url, key)
 
-def run_supabase_sql(query):
+def fetch_nclt_table_data(search_text=None):
     client = get_supabase_client()
     if not client:
         return None, "Supabase connection not available."
     try:
-        result = client.rpc('run_sql', {'sql': query}).execute() # Use run_sql function if created on Supabase
+        query = client.table("nclt_intelligence").select("*")
+        if search_text:
+            # Filter by any column matching search_text (case-insensitive)
+            # Columns: Unique ID, Regulatory File Name, Content
+            query = query.or_(
+                f"Unique ID.ilike.%{search_text}%,Regulatory File Name.ilike.%{search_text}%,Content.ilike.%{search_text}%"
+            )
+        result = query.execute()
         if result.data:
             df = pd.DataFrame(result.data)
             return df, None
@@ -143,21 +143,13 @@ def run_supabase_sql(query):
     except Exception as e:
         return None, str(e)
 
-def fetch_nclt_table_data(search_text=None):
+def run_supabase_sql(query):
     client = get_supabase_client()
     if not client:
         return None, "Supabase connection not available."
     try:
-        query = client.table("nclt_intelligence").select("*")
-        if search_text:
-            # Attempt basic search: check all columns for LIKE match
-            meta = client.table("nclt_intelligence").select("*").limit(1).execute()
-            if meta.data:
-                columns = list(meta.data[0].keys())
-                # Build OR filters for LIKE match
-                search_filter = "|".join([f"{col}.ilike.%{search_text}%" for col in columns])
-                query = query.or_(search_filter)
-        result = query.execute()
+        # You must have a Postgres function called 'run_sql' that only allows SELECT queries
+        result = client.rpc('run_sql', {'sql': query}).execute()
         if result.data:
             df = pd.DataFrame(result.data)
             return df, None
@@ -271,10 +263,9 @@ with tab2:
 # ----------------- TAB 3: NCLT CASES -----------------
 with tab3:
     st.header("NCLT Cases Intelligence Database")
-    st.markdown("> Powered by Supabase. All columns fetched from `nclt_intelligence` table.")
+    st.markdown("> Powered by Supabase. All columns fetched from `nclt_intelligence` table: **Unique ID, Regulatory File Name, Content**.")
 
-    # Basic Search Bar
-    search_text = st.text_input("Basic Search (searches all columns):", "")
+    search_text = st.text_input("Basic Search (searches Unique ID, Regulatory File Name, Content):", "")
     if st.button("Search NCLT Cases"):
         with st.spinner("Searching NCLT cases..."):
             df, err = fetch_nclt_table_data(search_text if search_text else None)
@@ -293,10 +284,9 @@ with tab3:
         elif df is not None and not df.empty:
             st.dataframe(df.head(50))
 
-    # Advanced SQL Query Editor (read-only)
     st.markdown("### Advanced SQL Query (Read-only)")
     st.markdown(
-        "Write custom **SELECT** queries. Example: `SELECT * FROM nclt_intelligence WHERE status = 'Active' LIMIT 10`"
+        "Write custom **SELECT** queries. Example: `SELECT * FROM nclt_intelligence WHERE \"Regulatory File Name\" ILIKE '%IBC%' LIMIT 10`"
     )
     sql_query = st.text_area("SQL Query", "SELECT * FROM nclt_intelligence LIMIT 20", height=80)
     if st.button("Run SQL Query"):
@@ -318,7 +308,7 @@ st.markdown("""
 ---
 **Note:**  
 - The app uses Google Gemini AI via google-genai python package.  
-- Requires: `pip install streamlit pandas fpdf PyPDF2 python-docx google-genai`  
+- Requires: `pip install streamlit pandas fpdf PyPDF2 python-docx google-genai supabase`  
 - For image text extraction: `pip install pytesseract pillow` (and install Tesseract if you want image text extraction).
 - Add your API key to Streamlit secrets as `GEMINI_API_KEY` or set as environment variable.
 - For NCLT tab: add `SUPABASE_URL` and `SUPABASE_KEY` in Streamlit secrets.  
