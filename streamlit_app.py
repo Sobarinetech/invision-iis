@@ -3,41 +3,32 @@ import pandas as pd
 import tempfile
 import os
 from fpdf import FPDF
-from datetime import datetime
 
 # Gemini AI imports
+import base64
 from google import genai
 from google.genai import types
 
-# Supabase imports
-from supabase import create_client
-
 # ------------------- CONFIG -------------------
 st.set_page_config(page_title="Invision Insolvency Intelligence Solutions", layout="wide")
-
-# Display current time and user
-current_time = "2025-08-27 17:15:39"  # UTC
-current_user = "evertechno"
-
 st.title("Invision Insolvency Intelligence Solutions")
-st.markdown(f"""
-<div style='background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 20px'>
-    <small>
-        Current Time (UTC): {current_time}<br>
-        User: {current_user}
-    </small>
-</div>
-""", unsafe_allow_html=True)
 
 # --------- UTILITY FUNCTIONS --------------
 
 def call_gemini_ai(input_text):
+    """
+    Calls Gemini AI (Google GenAI) using google-genai python package.
+    Requires:
+      - pip install google-genai
+      - GEMINI_API_KEY in Streamlit secrets or env
+    """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         try:
             api_key = st.secrets["GEMINI_API_KEY"]
         except Exception:
             return "No API key found in secrets or environment variable."
+
     try:
         client = genai.Client(api_key=api_key)
         model = "gemini-2.5-flash"
@@ -68,6 +59,7 @@ def call_gemini_ai(input_text):
         return f"Failed to call Gemini AI: {str(e)}"
 
 def extract_text_from_file(uploaded_file):
+    # Basic extractor: text, pdf, docx, images (optional: add more robust extractors as needed)
     import mimetypes
     file_type = mimetypes.guess_type(uploaded_file.name)[0] or ""
     ext = os.path.splitext(uploaded_file.name)[1].lower()
@@ -100,7 +92,7 @@ def extract_text_from_file(uploaded_file):
             text = "Unsupported file type."
     except Exception:
         text = "Failed to process file."
-    return text[:6000]
+    return text[:6000] # Limit input for AI
 
 def assets_template_csv():
     return (
@@ -115,8 +107,6 @@ def generate_pdf(text, title="Report"):
     pdf.add_page()
     pdf.set_font("Arial", "B", 16)
     pdf.cell(0, 10, title, ln=True, align="C")
-    pdf.set_font("Arial", size=10)
-    pdf.cell(0, 10, f"Generated on {current_time} UTC by {current_user}", ln=True, align="R")
     pdf.set_font("Arial", size=12)
     for line in text.split("\n"):
         pdf.multi_cell(0, 8, line)
@@ -126,86 +116,9 @@ def generate_pdf(text, title="Report"):
         pdf_bytes = tmp_pdf.read()
     return pdf_bytes
 
-# ------------------- SUPABASE DB UTILITY -------------------
-@st.cache_resource(show_spinner=False)
-def get_supabase_client():
-    url = st.secrets.get("SUPABASE_URL")
-    key = st.secrets.get("SUPABASE_KEY")
-    if not url or not key:
-        st.error("Missing Supabase URL or Key in secrets!")
-        return None
-    return create_client(url, key)
-
-def fetch_nclt_table_data(search_text=None):
-    client = get_supabase_client()
-    if not client:
-        return None, "Supabase connection not available."
-    try:
-        if search_text:
-            # Clean search_text for safety and escape single quotes
-            search_text = search_text.strip().replace("'", "''")
-            # Build SQL query with proper type casting and ILIKE
-            sql = f"""
-            SELECT * FROM nclt_intelligence 
-            WHERE 
-                CASE 
-                    WHEN '{search_text}' ~ '^[0-9]+$' 
-                    THEN "Unique ID" = {search_text}::bigint 
-                    ELSE false 
-                END
-                OR "Unique ID"::text ILIKE '%{search_text}%'
-                OR "Regulatory File Name" ILIKE '%{search_text}%'
-                OR "Content" ILIKE '%{search_text}%'
-            ORDER BY "Unique ID"
-            """
-            result = client.rpc('run_sql', {'query_text': sql}).execute()
-        else:
-            # Default query for initial load
-            sql = 'SELECT * FROM nclt_intelligence ORDER BY "Unique ID" LIMIT 50'
-            result = client.rpc('run_sql', {'query_text': sql}).execute()
-            
-        if result.data:
-            df = pd.DataFrame(result.data)
-            # Ensure column order
-            df = df[["Unique ID", "Regulatory File Name", "Content"]]
-            return df, None
-        else:
-            return pd.DataFrame(), None
-    except Exception as e:
-        return None, str(e)
-
-def run_supabase_sql(query):
-    client = get_supabase_client()
-    if not client:
-        return None, "Supabase connection not available."
-    try:
-        # Validate query starts with SELECT
-        if not query.strip().lower().startswith("select"):
-            return None, "Only SELECT queries are allowed!"
-        
-        # Execute query through run_sql function
-        result = client.rpc('run_sql', {'query_text': query}).execute()
-        
-        if result.data:
-            df = pd.DataFrame(result.data)
-            # Ensure column order if possible
-            try:
-                df = df[["Unique ID", "Regulatory File Name", "Content"]]
-            except:
-                pass # Keep original order if columns don't match
-            return df, None
-        else:
-            return pd.DataFrame(), None
-    except Exception as e:
-        return None, str(e)
-
 # ------------------- APP LAYOUT -------------------
 
-tab1, tab2, tab3 = st.tabs([
-    "Document Intelligence",
-    "Valuation Reports & Compliance",
-    "NCLT Cases"
-])
+tab1, tab2 = st.tabs(["Document Intelligence", "Valuation Reports & Compliance"])
 
 # ----------------- TAB 1: DOCUMENT INTELLIGENCE -----------------
 with tab1:
@@ -237,14 +150,14 @@ with tab1:
             st.download_button(
                 "Download Analysis Report (TXT)",
                 data=analysis,
-                file_name=f"analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                file_name="analysis_report.txt",
                 mime="text/plain"
             )
             pdf_bytes = generate_pdf(analysis, title="Document Intelligence Report")
             st.download_button(
                 "Download Analysis Report (PDF)",
                 data=pdf_bytes,
-                file_name=f"analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                file_name="analysis_report.pdf",
                 mime="application/pdf"
             )
 
@@ -270,7 +183,7 @@ with tab2:
         try:
             df = pd.read_csv(asset_file)
             st.success("Assets loaded successfully!")
-            st.dataframe(df)
+            st.dataframe(df.head(20))
             if st.button("Run IBC Compliant Valuation"):
                 asset_csv_text = df.to_csv(index=False)
                 ai_prompt = (
@@ -288,89 +201,25 @@ with tab2:
                 st.download_button(
                     "Download Valuation Report (TXT)",
                     data=valuation_report,
-                    file_name=f"valuation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    file_name="valuation_report.txt",
                     mime="text/plain"
                 )
                 pdf_bytes = generate_pdf(valuation_report, title="IBC Valuation Report")
                 st.download_button(
                     "Download Valuation Report (PDF)",
                     data=pdf_bytes,
-                    file_name=f"valuation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    file_name="valuation_report.pdf",
                     mime="application/pdf"
                 )
         except Exception as e:
             st.error(f"Failed to process CSV: {e}")
 
-# ----------------- TAB 3: NCLT CASES -----------------
-with tab3:
-    st.header("NCLT Cases Intelligence Database")
-    st.markdown("""
-    > Powered by Supabase. All columns fetched from `nclt_intelligence` table:  
-    > **Unique ID** (number), **Regulatory File Name** (text), **Content** (text)
-    """)
-
-    # Search interface
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        search_text = st.text_input(
-            "Basic Search (searches across all fields):",
-            placeholder="Enter search term (e.g., mumbai bench, file number, or content keywords)"
-        )
-    with col2:
-        st.write("")  # Spacing
-        st.write("")  # Spacing
-        search_button = st.button("🔍 Search NCLT Cases", use_container_width=True)
-
-    if search_button:
-        with st.spinner("Searching NCLT cases..."):
-            df, err = fetch_nclt_table_data(search_text if search_text else None)
-        if err:
-            st.error(f"Error: {err}")
-        elif df is not None and not df.empty:
-            st.success(f"Found {len(df)} records.")
-            st.dataframe(df, use_container_width=True)
-        else:
-            st.warning("No results found.")
-    else:
-        # Initial load: show top 50 records
-        with st.spinner("Loading recent cases..."):
-            df, err = fetch_nclt_table_data()
-        if err:
-            st.error(f"Error: {err}")
-        elif df is not None and not df.empty:
-            st.info("Showing 50 most recent cases")
-            st.dataframe(df, use_container_width=True)
-
-    # Advanced SQL Query Section
-    st.markdown("### Advanced SQL Query (Read-only)")
-    with st.expander("ℹ️ SQL Query Help"):
-        st.markdown("""
-        Write custom **SELECT** queries to search the NCLT database. Examples:
-        ```sql
-        -- Search by content
-        SELECT * FROM nclt_intelligence 
-        WHERE "Content" ILIKE '%mumbai bench%' 
-        LIMIT 10
-
-        -- Search by Regulatory File Name
-        SELECT * FROM nclt_intelligence 
-        WHERE "Regulatory File Name" ILIKE '%IBC%' 
-        ORDER BY "Unique ID" DESC 
-        LIMIT 20
-        ```
-        """)
-    
-    sql_query = st.text_area(
-        "SQL Query",
-        value='SELECT * FROM nclt_intelligence LIMIT 20',
-        height=100,
-        help="Write your SELECT query here. Only SELECT operations are allowed."
-    )
-
-    if st.button("▶️ Run SQL Query"):
-        if not sql_query.strip().lower().startswith("select"):
-            st.warning("⚠️ Only SELECT queries are allowed!")
-        else:
-            with st.spinner("Executing query..."):
-                df_sql, err_sql = run_supabase_sql(sql_query)
-            
+# ------------------- FOOTER INFO -------------------
+st.markdown("""
+---
+**Note:**  
+- The app uses Google Gemini AI via google-genai python package.  
+- Requires: `pip install streamlit pandas fpdf PyPDF2 python-docx google-genai`  
+- For image text extraction: `pip install pytesseract pillow` (and install Tesseract if you want image text extraction).
+- Add your API key to Streamlit secrets as `GEMINI_API_KEY` or set as environment variable.
+""")
