@@ -5,7 +5,6 @@ import os
 from fpdf import FPDF
 
 # Gemini AI imports
-import base64
 from google import genai
 from google.genai import types
 
@@ -25,7 +24,6 @@ def call_gemini_ai(input_text):
             api_key = st.secrets["GEMINI_API_KEY"]
         except Exception:
             return "No API key found in secrets or environment variable."
-
     try:
         client = genai.Client(api_key=api_key)
         model = "gemini-2.5-flash"
@@ -129,11 +127,20 @@ def fetch_nclt_table_data(search_text=None):
     try:
         query = client.table("nclt_intelligence").select("*")
         if search_text:
-            # Filter by any column matching search_text (case-insensitive)
-            # Columns: Unique ID, Regulatory File Name, Content
-            query = query.or_(
-                f"Unique ID.ilike.%{search_text}%,Regulatory File Name.ilike.%{search_text}%,Content.ilike.%{search_text}%"
-            )
+            # Clean search_text for safety
+            search_text = search_text.strip()
+            # Only apply ilike to text columns
+            # For Unique ID, cast to text
+            # If search is all digits, also support direct equality
+            filters = []
+            if search_text.isdigit():
+                filters.append(f'"Unique ID".eq.{search_text}')
+            # Cast Unique ID to text for ilike
+            filters.append(f'Unique ID::text.ilike.%{search_text}%')
+            filters.append(f'Regulatory File Name.ilike.%{search_text}%')
+            filters.append(f'Content.ilike.%{search_text}%')
+            # Join filters with OR
+            query = query.or_('|'.join(filters))
         result = query.execute()
         if result.data:
             df = pd.DataFrame(result.data)
@@ -286,7 +293,7 @@ with tab3:
 
     st.markdown("### Advanced SQL Query (Read-only)")
     st.markdown(
-        "Write custom **SELECT** queries. Example: `SELECT * FROM nclt_intelligence WHERE \"Regulatory File Name\" ILIKE '%IBC%' LIMIT 10`"
+        "Write custom **SELECT** queries. Example: `SELECT * FROM nclt_intelligence WHERE \"Content\" ILIKE '%mumbai bench%' LIMIT 10`"
     )
     sql_query = st.text_area("SQL Query", "SELECT * FROM nclt_intelligence LIMIT 20", height=80)
     if st.button("Run SQL Query"):
